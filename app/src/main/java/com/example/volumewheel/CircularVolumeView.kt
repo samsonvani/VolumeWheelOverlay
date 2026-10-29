@@ -28,16 +28,14 @@ class CircularVolumeView(
 ) : View(context) {
 
     companion object {
-        const val VOLUME_SCALE = 4
+        /** Фиксированное число делений на колесе — от 0 до 63. */
+        const val DISPLAY_MAX = 63
         private const val TAG = "VolumeWheel"
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-    // Реальные максимумы — читаем заново при каждом взаимодействии
-    private var systemMaxVolume: Int = 0
-    private var displayMaxVolume: Int = 0
-
+    /** Текущая громкость в делениях колеса: 0..63. */
     private var currentVolume: Int = 0
 
     // --- Кисти ---
@@ -89,79 +87,23 @@ class CircularVolumeView(
         onDragStart?.invoke()
     }
 
-    private val refreshRunnable = object : Runnable {
-        override fun run() {
-            refreshMaxVolume()
-            if (!isAdjusting && !isDragging) {
-                val sysVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                val virtualVol = sysVol * VOLUME_SCALE
-                if (virtualVol != currentVolume) {
-                    currentVolume = virtualVol
-                    invalidate()
-                }
-            }
-            handler.postDelayed(this, 800)
-        }
-    }
-
     private val isMutedNow: Boolean get() = currentVolume == 0
 
     init {
-        systemMaxVolume = readSystemMax()
-        displayMaxVolume = systemMaxVolume * VOLUME_SCALE
-        currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) * VOLUME_SCALE
-        Log.d(TAG, "init: systemMax=$systemMaxVolume displayMax=$displayMaxVolume current=$currentVolume")
+        // Пытаемся прочитать текущую громкость, но не полагаемся на неё
+        currentVolume = try {
+            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, DISPLAY_MAX)
+        } catch (_: Exception) { 0 }
+        Log.d(TAG, "init: currentVolume=$currentVolume / DISPLAY_MAX=$DISPLAY_MAX")
         applySettings()
         isClickable = true
         isFocusable = false
-    }
-
-    /**
-     * Читаем реальный максимум из системы.
-     * Некоторые прошивки отдают 15 при старте, но 63 после инициализации аудио —
-     * поэтому вызываем при каждом взаимодействии, а не только в конструкторе.
-     */
-    private fun readSystemMax(): Int {
-        return try {
-            audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        } catch (_: Exception) {
-            15
-        }
-    }
-
-    private fun refreshMaxVolume(): Boolean {
-        val newMax = readSystemMax()
-        if (newMax != systemMaxVolume) {
-            Log.d(TAG, "maxVolume changed: $systemMaxVolume -> $newMax")
-            val oldDisplayMax = displayMaxVolume
-            systemMaxVolume = newMax
-            displayMaxVolume = newMax * VOLUME_SCALE
-            if (oldDisplayMax > 0) {
-                currentVolume = (currentVolume.toFloat() / oldDisplayMax * displayMaxVolume)
-                    .roundToInt()
-                    .coerceIn(0, displayMaxVolume)
-            }
-            return true
-        }
-        return false
     }
 
     fun applySettings() {
         radius = settings.size.toFloat()
         requestLayout()
         invalidate()
-    }
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        refreshMaxVolume()
-        handler.post(refreshRunnable)
-    }
-
-    override fun onDetachedFromWindow() {
-        handler.removeCallbacks(refreshRunnable)
-        handler.removeCallbacks(longPressRunnable)
-        super.onDetachedFromWindow()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -172,6 +114,7 @@ class CircularVolumeView(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
+        // 1. Основной диск
         val shader = RadialGradient(
             centerX, centerY, radius,
             intArrayOf(lighten(settings.wheelColor, 0.15f), darken(settings.wheelColor, 0.4f)),
@@ -182,9 +125,10 @@ class CircularVolumeView(
         canvas.drawCircle(centerX, centerY, radius, circlePaint)
         circlePaint.shader = null
 
+        // 2. Внешние метки — ровно 63 штуки
         tickPaint.color = settings.tickColor
-        for (i in 0..displayMaxVolume) {
-            val angle = startAngle + sweepAngle * i / displayMaxVolume
+        for (i in 0..DISPLAY_MAX) {
+            val angle = startAngle + sweepAngle * i / DISPLAY_MAX
             val rad = Math.toRadians(angle.toDouble())
             val innerR = radius - 18f
             val outerR = radius - 6f
@@ -195,7 +139,10 @@ class CircularVolumeView(
             canvas.drawLine(x1, y1, x2, y2, tickPaint)
         }
 
+        // 3. Внутреннее кольцо с риской
         drawInnerKnob(canvas)
+
+        // 4. Кнопка mute в центре
         drawMuteButton(canvas)
     }
 
@@ -211,7 +158,7 @@ class CircularVolumeView(
         canvas.drawCircle(centerX, centerY, ringR - ringW / 2f, knobEdgePaint)
         canvas.drawCircle(centerX, centerY, ringR + ringW / 2f, knobEdgePaint)
 
-        val markerAngle = startAngle + sweepAngle * currentVolume / displayMaxVolume
+        val markerAngle = startAngle + sweepAngle * currentVolume / DISPLAY_MAX
         val rad = Math.toRadians(markerAngle.toDouble())
         val rIn = radius * 0.44f
         val rOut = radius * 0.60f
@@ -366,14 +313,17 @@ class CircularVolumeView(
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, AudioManager.FLAG_SHOW_UI)
             currentVolume = 0
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            Log.e(TAG, "mute failed", e)
+        }
         invalidate()
     }
 
+    /**
+     * Угол пальца → деление колеса (0..63) → setStreamVolume(0..63).
+     * Без оглядки на getStreamMaxVolume.
+     */
     private fun updateVolumeFromTouch(event: MotionEvent) {
-        // Всегда читаем актуальный максимум перед вычислением
-        refreshMaxVolume()
-
         val dx = event.x - centerX
         val dy = event.y - centerY
         var angle = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
@@ -384,43 +334,53 @@ class CircularVolumeView(
 
         val clampedAngle = angle.coerceIn(startAngle, startAngle + sweepAngle)
 
-        val virtualVolume = ((clampedAngle - startAngle) / sweepAngle * displayMaxVolume)
+        val virtualVolume = ((clampedAngle - startAngle) / sweepAngle * DISPLAY_MAX)
             .roundToInt()
-            .coerceIn(0, displayMaxVolume)
+            .coerceIn(0, DISPLAY_MAX)
 
-        // Если виртуальный максимум достигнут — целимся прямо в системный максимум
-        val systemVol = if (virtualVolume >= displayMaxVolume) {
-            systemMaxVolume
-        } else {
-            (virtualVolume.toFloat() / VOLUME_SCALE)
-                .roundToInt()
-                .coerceIn(0, systemMaxVolume)
+        if (virtualVolume == currentVolume) return
+
+        currentVolume = virtualVolume
+
+        // При повышении громкости снимаем mute, если поток был замьючен
+        if (virtualVolume > 0) {
+            try {
+                if (audioManager.isStreamMute(AudioManager.STREAM_MUSIC)) {
+                    audioManager.adjustStreamVolume(
+                        AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0
+                    )
+                }
+            } catch (_: Exception) { }
         }
 
-        if (virtualVolume != currentVolume) {
-            currentVolume = virtualVolume
-
-            if (systemVol > 0) {
-                try {
-                    if (audioManager.isStreamMute(AudioManager.STREAM_MUSIC)) {
-                        audioManager.adjustStreamVolume(
-                            AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0
-                        )
-                    }
-                } catch (_: Exception) { }
-            }
-
+        try {
+            audioManager.setStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                virtualVolume,           // шлём 0..63 напрямую
+                AudioManager.FLAG_SHOW_UI
+            )
+            val readback = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            Log.d(TAG, "set=$virtualVolume, readback=$readback, DISPLAY_MAX=$DISPLAY_MAX")
+        } catch (e: IllegalArgumentException) {
+            // Система не принимает такие значения — пробуем пропорционально
+            Log.e(TAG, "setStreamVolume($virtualVolume) rejected, fallback", e)
+            val sysMax = try {
+                audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            } catch (_: Exception) { 15 }
+            val fallback = (virtualVolume.toFloat() / DISPLAY_MAX * sysMax)
+                .roundToInt()
+                .coerceIn(0, sysMax)
             try {
                 audioManager.setStreamVolume(
-                    AudioManager.STREAM_MUSIC, systemVol, AudioManager.FLAG_SHOW_UI
+                    AudioManager.STREAM_MUSIC, fallback, AudioManager.FLAG_SHOW_UI
                 )
-                Log.d(TAG, "set volume: virtual=$virtualVolume/$displayMaxVolume system=$systemVol/$systemMaxVolume")
-            } catch (e: Exception) {
-                Log.e(TAG, "setStreamVolume failed: $systemVol", e)
-            }
-
-            invalidate()
+                Log.d(TAG, "fallback set=$fallback / $sysMax")
+            } catch (_: Exception) { }
+        } catch (e: Exception) {
+            Log.e(TAG, "setStreamVolume failed", e)
         }
+
+        invalidate()
     }
 
     private fun darken(color: Int, factor: Float): Int {
