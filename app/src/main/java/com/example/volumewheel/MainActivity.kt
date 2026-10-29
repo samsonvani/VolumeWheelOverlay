@@ -43,4 +43,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btn_start_stop).setOnClickListener {
-            if (!Settings.canDrawOver
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(
+                    this,
+                    "Сначала разрешите «Поверх других приложений»",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@setOnClickListener
+            }
+            val intent = Intent(this, VolumeOverlayService::class.java)
+            ContextCompat.startForegroundService(this, intent)
+            Toast.makeText(this, "Регулятор запущен", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
