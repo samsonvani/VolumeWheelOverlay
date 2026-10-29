@@ -31,6 +31,7 @@ class CircularVolumeView(
     private var currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
     private var lastMutedState = isMutedNow
 
+    // --- Кисти ---
     private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -42,18 +43,32 @@ class CircularVolumeView(
         setShadowLayer(8f, 2f, 2f, Color.BLACK)
     }
     private val buttonBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val knobRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val knobEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+    }
+    private val knobMarkerGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val knobMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
+    // --- Геометрия ---
     private var radius = settings.size.toFloat()
     private val startAngle = -210f
     private val sweepAngle = 240f
 
     private val centerX get() = width / 2f
     private val centerY get() = height / 2f
-    private val muteButtonRadius get() = radius * 0.35f
 
+    // Радиусы внутренних элементов
+    private val muteButtonRadius get() = radius * 0.22f
+    private val innerKnobCenterR get() = radius * 0.52f
+    private val innerKnobHalfWidth get() = radius * 0.065f
+
+    // --- Колбэки для сервиса (перетаскивание) ---
     var onDragStart: (() -> Unit)? = null
     var onDrag: ((Float, Float) -> Unit)? = null
 
+    // --- Состояние жеста ---
     private var isDragging = false
     private var isAdjusting = false
     private var isCenterPress = false
@@ -118,7 +133,7 @@ class CircularVolumeView(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        // 1. Диск
+        // 1. Основной диск
         val shader = RadialGradient(
             centerX, centerY, radius,
             intArrayOf(lighten(settings.wheelColor, 0.15f), darken(settings.wheelColor, 0.4f)),
@@ -129,7 +144,7 @@ class CircularVolumeView(
         canvas.drawCircle(centerX, centerY, radius, circlePaint)
         circlePaint.shader = null
 
-        // 2. Метки
+        // 2. Внешние метки
         tickPaint.color = settings.tickColor
         for (i in 0..maxVolume) {
             val angle = startAngle + sweepAngle * i / maxVolume
@@ -143,16 +158,54 @@ class CircularVolumeView(
             canvas.drawLine(x1, y1, x2, y2, tickPaint)
         }
 
-        // 3. Указатель
+        // 3. Внешний указатель (на дуге меток)
         pointerPaint.color = settings.tickColor
         val pointerAngle = startAngle + sweepAngle * currentVolume / maxVolume
-        val rad = Math.toRadians(pointerAngle.toDouble())
-        val px = centerX + (radius - 30f) * cos(rad).toFloat()
-        val py = centerY + (radius - 30f) * sin(rad).toFloat()
-        canvas.drawCircle(px, py, 13f, pointerPaint)
+        val pointerRad = Math.toRadians(pointerAngle.toDouble())
+        val px = centerX + (radius - 30f) * cos(pointerRad).toFloat()
+        val py = centerY + (radius - 30f) * sin(pointerRad).toFloat()
+        canvas.drawCircle(px, py, 11f, pointerPaint)
 
-        // 4. Кнопка mute в центре
+        // 4. Внутренний круг (кольцо) с вращающейся меткой
+        drawInnerKnob(canvas)
+
+        // 5. Кнопка mute в центре
         drawMuteButton(canvas)
+    }
+
+    /**
+     * Внутреннее кольцо-диск с точкой-меткой.
+     * Именно эту точку «крутит» пользователь — она следует за громкостью.
+     */
+    private fun drawInnerKnob(canvas: Canvas) {
+        val ringR = innerKnobCenterR
+        val ringW = innerKnobHalfWidth * 2
+
+        // Само кольцо
+        knobRingPaint.strokeWidth = ringW
+        knobRingPaint.color = darken(settings.wheelColor, 0.5f)
+        canvas.drawCircle(centerX, centerY, ringR, knobRingPaint)
+
+        // Мягкие края кольца — эффект объёма
+        knobEdgePaint.color = adjustAlpha(settings.tickColor, 0.22f)
+        canvas.drawCircle(centerX, centerY, ringR - ringW / 2f, knobEdgePaint)
+        canvas.drawCircle(centerX, centerY, ringR + ringW / 2f, knobEdgePaint)
+
+        // Метка (точка), вращающаяся вместе с громкостью
+        val markerAngle = startAngle + sweepAngle * currentVolume / maxVolume
+        val markerRad = Math.toRadians(markerAngle.toDouble())
+        val mx = centerX + ringR * cos(markerRad).toFloat()
+        val my = centerY + ringR * sin(markerRad).toFloat()
+
+        // Свечение вокруг метки
+        knobMarkerGlow.color = adjustAlpha(settings.tickColor, 0.35f)
+        knobMarkerGlow.setShadowLayer(10f, 0f, 0f, settings.tickColor)
+        canvas.drawCircle(mx, my, ringW * 0.9f, knobMarkerGlow)
+
+        // Сама метка
+        knobMarkerPaint.color = settings.tickColor
+        knobMarkerPaint.setShadowLayer(4f, 1f, 1f, Color.BLACK)
+        canvas.drawCircle(mx, my, ringW * 0.55f, knobMarkerPaint)
     }
 
     private fun drawMuteButton(canvas: Canvas) {
@@ -173,7 +226,7 @@ class CircularVolumeView(
         }
         canvas.drawCircle(centerX, centerY, r, border)
 
-        drawSpeakerIcon(canvas, centerX, centerY, r * 1.25f, muted, settings.tickColor)
+        drawSpeakerIcon(canvas, centerX, centerY, r * 1.35f, muted, settings.tickColor)
     }
 
     private fun drawSpeakerIcon(
@@ -302,19 +355,36 @@ class CircularVolumeView(
         invalidate()
     }
 
+    /**
+     * Преобразование позиции касания в громкость.
+     *
+     * Раньше при уходе за нижнюю границу дуги (atan2 даёт 150° вместо -210°)
+     * код клампил к 30° = максимум — отсюда перескок с min на max.
+     *
+     * Теперь: приводим сырой угол к непрерывной системе через центр дуги,
+     * и только после этого клампим в диапазон [startAngle, startAngle + sweepAngle].
+     */
     private fun updateVolumeFromTouch(event: MotionEvent) {
         val dx = event.x - centerX
         val dy = event.y - centerY
         var angle = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
-        if (angle < startAngle) angle += 360f
-        if (angle > startAngle + sweepAngle) angle = startAngle + sweepAngle
 
-        val volume = ((angle - startAngle) / sweepAngle * maxVolume)
+        // Приводим угол к системе, ближайшей к центру нашей дуги
+        val arcCenter = startAngle + sweepAngle / 2f  // -90°
+        while (angle - arcCenter > 180f) angle -= 360f
+        while (arcCenter - angle > 180f) angle += 360f
+
+        // Теперь углы за пределами дуги корректно клампятся к ближайшему концу
+        val clampedAngle = angle.coerceIn(startAngle, startAngle + sweepAngle)
+
+        val volume = ((clampedAngle - startAngle) / sweepAngle * maxVolume)
             .roundToInt()
             .coerceIn(0, maxVolume)
 
         if (volume != currentVolume) {
             currentVolume = volume
+
+            // Снимаем mute при повышении громкости
             if (volume > 0 && isMutedNow) {
                 try {
                     audioManager.adjustStreamVolume(
@@ -322,6 +392,7 @@ class CircularVolumeView(
                     )
                 } catch (_: Exception) { }
             }
+
             audioManager.setStreamVolume(
                 AudioManager.STREAM_MUSIC, volume, AudioManager.FLAG_SHOW_UI
             )
