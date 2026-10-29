@@ -6,7 +6,9 @@ data class OverlaySettings(
     val enabled: Boolean = true,
     val wheelColor: Int = 0xFF2A2A2A.toInt(),
     val tickColor: Int = 0xFFFFFFFF.toInt(),
-    val size: Int = 120
+    val size: Int = 120,
+    val posX: Int = -1,
+    val posY: Int = -1
 ) {
     companion object {
         private const val PREFS = "overlay_prefs"
@@ -14,6 +16,11 @@ data class OverlaySettings(
         private const val KEY_WHEEL_COLOR = "wheel_color"
         private const val KEY_TICK_COLOR = "tick_color"
         private const val KEY_SIZE = "size"
+        private const val KEY_POS_X = "pos_x"
+        private const val KEY_POS_Y = "pos_y"
+
+        const val SIZE_MIN = 60
+        const val SIZE_MAX = 500
 
         fun load(context: Context): OverlaySettings {
             val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -21,7 +28,9 @@ data class OverlaySettings(
                 enabled = p.getBoolean(KEY_ENABLED, true),
                 wheelColor = p.getInt(KEY_WHEEL_COLOR, 0xFF2A2A2A.toInt()),
                 tickColor = p.getInt(KEY_TICK_COLOR, 0xFFFFFFFF.toInt()),
-                size = p.getInt(KEY_SIZE, 120)
+                size = p.getInt(KEY_SIZE, 120),
+                posX = p.getInt(KEY_POS_X, -1),
+                posY = p.getInt(KEY_POS_Y, -1)
             )
         }
 
@@ -31,6 +40,16 @@ data class OverlaySettings(
                 putInt(KEY_WHEEL_COLOR, settings.wheelColor)
                 putInt(KEY_TICK_COLOR, settings.tickColor)
                 putInt(KEY_SIZE, settings.size)
+                putInt(KEY_POS_X, settings.posX)
+                putInt(KEY_POS_Y, settings.posY)
+                apply()
+            }
+        }
+
+        fun savePosition(context: Context, x: Int, y: Int) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().apply {
+                putInt(KEY_POS_X, x)
+                putInt(KEY_POS_Y, y)
                 apply()
             }
         }
