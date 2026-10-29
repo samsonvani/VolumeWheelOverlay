@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.provider.Settings
 import android.view.View
 import android.widget.Button
 import android.widget.SeekBar
@@ -11,6 +12,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.content.ContextCompat
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -34,20 +36,25 @@ class SettingsActivity : AppCompatActivity() {
         sizeLabel = findViewById(R.id.size_label)
 
         switchEnabled.isChecked = settings.enabled
-        seekSize.max = 180
-        seekSize.progress = settings.size - 80
+        seekSize.max = OverlaySettings.SIZE_MAX - OverlaySettings.SIZE_MIN
+        seekSize.progress = (settings.size - OverlaySettings.SIZE_MIN)
+            .coerceIn(0, seekSize.max)
         updatePreviews()
         updateSizeLabel()
 
         switchEnabled.setOnCheckedChangeListener { _, checked ->
             settings = settings.copy(enabled = checked)
             saveAndNotify()
+            if (checked && !VolumeOverlayService.isRunning && Settings.canDrawOverlays(this)) {
+                val intent = Intent(this, VolumeOverlayService::class.java)
+                ContextCompat.startForegroundService(this, intent)
+            }
         }
 
         seekSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
-                    settings = settings.copy(size = progress + 80)
+                    settings = settings.copy(size = progress + OverlaySettings.SIZE_MIN)
                     updateSizeLabel()
                     saveAndNotify()
                 }
