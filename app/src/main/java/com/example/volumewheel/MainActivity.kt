@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Button
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -13,39 +15,32 @@ import androidx.core.content.ContextCompat
 class MainActivity : AppCompatActivity() {
 
     private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* не критично */ }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Запрос разрешения на уведомления (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // Проверка разрешения на overlay
-        if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
-        } else {
-            startOverlayService()
+        findViewById<Button>(R.id.btn_settings).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
         }
-    }
 
-    override fun onResume() {
-        super.onResume()
-        // После возврата из настроек разрешение могло быть выдано
-        if (Settings.canDrawOverlays(this)) {
-            startOverlayService()
+        findViewById<Button>(R.id.btn_overlay_permission).setOnClickListener {
+            if (!Settings.canDrawOverlays(this)) {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            } else {
+                Toast.makeText(this, "Разрешение уже выдано", Toast.LENGTH_SHORT).show()
+            }
         }
-    }
 
-    private fun startOverlayService() {
-        val intent = Intent(this, VolumeOverlayService::class.java)
-        ContextCompat.startForegroundService(this, intent)
-    }
-}
+        findViewById<Button>(R.id.btn_start_stop).setOnClickListener {
+            if (!Settings.canDrawOver
