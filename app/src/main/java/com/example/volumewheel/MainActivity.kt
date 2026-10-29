@@ -51,9 +51,23 @@ class MainActivity : AppCompatActivity() {
                 ).show()
                 return@setOnClickListener
             }
-            val intent = Intent(this, VolumeOverlayService::class.java)
-            ContextCompat.startForegroundService(this, intent)
+            startOverlayIfNeeded()
             Toast.makeText(this, "Регулятор запущен", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Автозапуск: если в настройках регулятор включён и разрешение есть — запускаем
+        if (!Settings.canDrawOverlays(this)) return
+        val prefs = OverlaySettings.load(this)
+        if (prefs.enabled && !VolumeOverlayService.isRunning) {
+            startOverlayIfNeeded()
+        }
+    }
+
+    private fun startOverlayIfNeeded() {
+        val intent = Intent(this, VolumeOverlayService::class.java)
+        ContextCompat.startForegroundService(this, intent)
     }
 }
