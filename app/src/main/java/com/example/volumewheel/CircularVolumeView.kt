@@ -26,11 +26,23 @@ class CircularVolumeView(
     private var settings: OverlaySettings
 ) : View(context) {
 
-    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private val maxVolume: Int = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    companion object {
+        /** Во сколько раз визуальная шкала больше реальной системной. */
+        const val VOLUME_SCALE = 4
+    }
 
-    private var currentVolume: Int = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-    private var lastMutedState: Boolean = isMutedNow
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    /** Реальный максимум системы (например, 15 шагов). */
+    private val systemMaxVolume: Int =
+        audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+
+    /** Визуальный максимум — шкала на колесе (например, 15*4=60). */
+    private val displayMaxVolume: Int = systemMaxVolume * VOLUME_SCALE
+
+    /** Текущая громкость в виртуальных шагах 0..displayMaxVolume. */
+    private var currentVolume: Int =
+        audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) * VOLUME_SCALE
 
     // --- Кисти ---
     private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -83,23 +95,20 @@ class CircularVolumeView(
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            val sysVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            val sysMuted = isMutedNow
-            if (sysVol != currentVolume || sysMuted != lastMutedState) {
-                currentVolume = sysVol
-                lastMutedState = sysMuted
-                invalidate()
+            if (!isAdjusting && !isDragging) {
+                val sysVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                val virtualVol = sysVol * VOLUME_SCALE
+                if (virtualVol != currentVolume) {
+                    currentVolume = virtualVol
+                    invalidate()
+                }
             }
             handler.postDelayed(this, 800)
         }
     }
 
-    private val isMutedNow: Boolean
-        get() = try {
-            audioManager.isStreamMute(AudioManager.STREAM_MUSIC)
-        } catch (_: Exception) {
-            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) == 0
-        }
+    /** Иконка «выключено» при нулевой громкости. */
+    private val isMutedNow: Boolean get() = currentVolume == 0
 
     init {
         applySettings()
@@ -143,10 +152,10 @@ class CircularVolumeView(
         canvas.drawCircle(centerX, centerY, radius, circlePaint)
         circlePaint.shader = null
 
-        // 2. Внешние метки
+        // 2. Внешние метки — displayMaxVolume штук (60 в типичном случае)
         tickPaint.color = settings.tickColor
-        for (i in 0..maxVolume) {
-            val angle = startAngle + sweepAngle * i / maxVolume
+        for (i in 0..displayMaxVolume) {
+            val angle = startAngle + sweepAngle * i / displayMaxVolume
             val rad = Math.toRadians(angle.toDouble())
             val innerR = radius - 18f
             val outerR = radius - 6f
@@ -168,18 +177,16 @@ class CircularVolumeView(
         val ringR = innerKnobCenterR
         val ringW = innerKnobHalfWidth * 2
 
-        // Кольцо
         knobRingPaint.strokeWidth = ringW
         knobRingPaint.color = darken(settings.wheelColor, 0.5f)
         canvas.drawCircle(centerX, centerY, ringR, knobRingPaint)
 
-        // Объёмные края кольца
         knobEdgePaint.color = adjustAlpha(settings.tickColor, 0.22f)
         canvas.drawCircle(centerX, centerY, ringR - ringW / 2f, knobEdgePaint)
         canvas.drawCircle(centerX, centerY, ringR + ringW / 2f, knobEdgePaint)
 
-        // Риска-индикатор уровня громкости на кольце
-        val markerAngle = startAngle + sweepAngle * currentVolume / maxVolume
+        // Риска уровня громкости: радиальная линия, пересекающая кольцо
+        val markerAngle = startAngle + sweepAngle * currentVolume / displayMaxVolume
         val rad = Math.toRadians(markerAngle.toDouble())
         val rIn = radius * 0.44f
         val rOut = radius * 0.60f
@@ -311,7 +318,7 @@ class CircularVolumeView(
                 handler.removeCallbacks(longPressRunnable)
                 when {
                     isDragging -> onDragEnd?.invoke()
-                    isCenterPress && event.action == MotionEvent.ACTION_UP -> toggleMute()
+                    isCenterPress && event.action == MotionEvent.ACTION_UP -> muteToZero()
                     !isAdjusting && event.action == MotionEvent.ACTION_UP -> updateVolumeFromTouch(event)
                 }
                 isDragging = false
@@ -329,20 +336,18 @@ class CircularVolumeView(
         return dist < muteButtonRadius
     }
 
-    private fun toggleMute() {
+    /**
+     * Кнопка mute: просто ставит громкость в 0.
+     * Никакого ADJUST_MUTE — на Android 11 он часто игнорируется системой.
+     */
+    private fun muteToZero() {
         try {
-            val currentlyMuted = isMutedNow
-            val direction = if (currentlyMuted) {
-                AudioManager.ADJUST_UNMUTE
-            } else {
-                AudioManager.ADJUST_MUTE
-            }
-            audioManager.adjustStreamVolume(
+            audioManager.setStreamVolume(
                 AudioManager.STREAM_MUSIC,
-                direction,
+                0,
                 AudioManager.FLAG_SHOW_UI
             )
-            lastMutedState = isMutedNow
+            currentVolume = 0
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         } catch (_: Exception) { }
         invalidate()
@@ -353,28 +358,47 @@ class CircularVolumeView(
         val dy = event.y - centerY
         var angle = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
 
+        // Приводим угол к непрерывной системе через центр дуги
         val arcCenter = startAngle + sweepAngle / 2f
         while (angle - arcCenter > 180f) angle -= 360f
         while (arcCenter - angle > 180f) angle += 360f
 
         val clampedAngle = angle.coerceIn(startAngle, startAngle + sweepAngle)
-        val volume = ((clampedAngle - startAngle) / sweepAngle * maxVolume)
-            .roundToInt()
-            .coerceIn(0, maxVolume)
 
-        if (volume != currentVolume) {
-            currentVolume = volume
-            if (volume > 0 && isMutedNow) {
+        // Виртуальная громкость 0..displayMaxVolume (60 в типичном случае)
+        val virtualVolume = ((clampedAngle - startAngle) / sweepAngle * displayMaxVolume)
+            .roundToInt()
+            .coerceIn(0, displayMaxVolume)
+
+        // Реальная громкость 0..systemMaxVolume (15)
+        val systemVol = (virtualVolume.toFloat() / VOLUME_SCALE)
+            .roundToInt()
+            .coerceIn(0, systemMaxVolume)
+
+        if (virtualVolume != currentVolume) {
+            currentVolume = virtualVolume
+
+            // Если поток был замьючен железной кнопкой — принудительно снимаем mute
+            if (systemVol > 0) {
                 try {
-                    audioManager.adjustStreamVolume(
-                        AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0
-                    )
+                    if (audioManager.isStreamMute(AudioManager.STREAM_MUSIC)) {
+                        audioManager.adjustStreamVolume(
+                            AudioManager.STREAM_MUSIC,
+                            AudioManager.ADJUST_UNMUTE,
+                            0
+                        )
+                    }
                 } catch (_: Exception) { }
             }
-            audioManager.setStreamVolume(
-                AudioManager.STREAM_MUSIC, volume, AudioManager.FLAG_SHOW_UI
-            )
-            lastMutedState = isMutedNow
+
+            try {
+                audioManager.setStreamVolume(
+                    AudioManager.STREAM_MUSIC,
+                    systemVol,
+                    AudioManager.FLAG_SHOW_UI
+                )
+            } catch (_: Exception) { }
+
             invalidate()
         }
     }
