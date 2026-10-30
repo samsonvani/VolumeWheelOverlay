@@ -87,6 +87,14 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="24dp" />
 
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switch_fade_enabled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Режим прозрачности"
+            android:textSize="16sp"
+            android:layout_marginBottom="12dp" />
+
         <TextView
             android:id="@+id/alpha_label"
             android:layout_width="wrap_content"
