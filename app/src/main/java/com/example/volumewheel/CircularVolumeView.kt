@@ -28,15 +28,16 @@ class CircularVolumeView(
 ) : View(context) {
 
     companion object {
-        /** Фиксированное число делений на колесе — от 0 до 63. */
         const val DISPLAY_MAX = 63
         private const val TAG = "VolumeWheel"
+        /** Прозрачность иконки спикера, когда звук включён (кнопка «неактивна»). */
+        private const val SPEAKER_IDLE_ALPHA = 0.55f
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-    /** Текущая громкость в делениях колеса: 0..63. */
     private var currentVolume: Int = 0
+    private var lastNonZeroVolume: Int = settings.lastNonZeroVolume
 
     // --- Кисти ---
     private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -64,7 +65,8 @@ class CircularVolumeView(
     private val centerX get() = width / 2f
     private val centerY get() = height / 2f
 
-    private val muteButtonRadius get() = radius * 0.22f
+    /** Кнопка mute стала заметно крупнее. */
+    private val muteButtonRadius get() = radius * 0.28f
     private val innerKnobCenterR get() = radius * 0.52f
     private val innerKnobHalfWidth get() = radius * 0.065f
 
@@ -87,14 +89,31 @@ class CircularVolumeView(
         onDragStart?.invoke()
     }
 
+    /** Плавно прячет виджет при бездействии. */
+    private val hideRunnable = Runnable {
+        if (!isDragging && !isAdjusting && !isCenterPress) {
+            animate()
+                .alpha(settings.inactiveAlpha.coerceIn(0.1f, 1f))
+                .setDuration(500)
+                .start()
+        }
+    }
+
     private val isMutedNow: Boolean get() = currentVolume == 0
 
     init {
-        // Пытаемся прочитать текущую громкость, но не полагаемся на неё
         currentVolume = try {
             audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, DISPLAY_MAX)
         } catch (_: Exception) { 0 }
-        Log.d(TAG, "init: currentVolume=$currentVolume / DISPLAY_MAX=$DISPLAY_MAX")
+
+        // Если система при старте вернула 0 (mute) — попробуем прошлый уровень из настроек
+        if (currentVolume > 0) {
+            lastNonZeroVolume = currentVolume
+        } else if (lastNonZeroVolume <= 0) {
+            lastNonZeroVolume = DISPLAY_MAX / 2
+        }
+
+        Log.d(TAG, "init: current=$currentVolume, lastNonZero=$lastNonZeroVolume")
         applySettings()
         isClickable = true
         isFocusable = false
@@ -104,6 +123,38 @@ class CircularVolumeView(
         radius = settings.size.toFloat()
         requestLayout()
         invalidate()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        // Стартуем активными и запускаем таймер ухода в прозрачность
+        alpha = 1f
+        scheduleHide()
+    }
+
+    override fun onDetachedFromWindow() {
+        handler.removeCallbacks(hideRunnable)
+        handler.removeCallbacks(longPressRunnable)
+        animate().cancel()
+        super.onDetachedFromWindow()
+    }
+
+    /** Делаем виджет полностью видимым и перезапускаем таймер. */
+    private fun wakeUp() {
+        handler.removeCallbacks(hideRunnable)
+        animate().cancel()
+        if (alpha != 1f) {
+            animate().alpha(1f).setDuration(150).start()
+        }
+        scheduleHide()
+    }
+
+    private fun scheduleHide() {
+        handler.removeCallbacks(hideRunnable)
+        val delay = settings.inactiveTimeoutSec.coerceIn(
+            OverlaySettings.TIMEOUT_MIN, OverlaySettings.TIMEOUT_MAX
+        ) * 1000L
+        handler.postDelayed(hideRunnable, delay)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -125,7 +176,7 @@ class CircularVolumeView(
         canvas.drawCircle(centerX, centerY, radius, circlePaint)
         circlePaint.shader = null
 
-        // 2. Внешние метки — ровно 63 штуки
+        // 2. Внешние метки — 63 штуки
         tickPaint.color = settings.tickColor
         for (i in 0..DISPLAY_MAX) {
             val angle = startAngle + sweepAngle * i / DISPLAY_MAX
@@ -180,7 +231,7 @@ class CircularVolumeView(
 
         buttonBgPaint.color = when {
             isCenterPress -> darken(settings.wheelColor, 0.55f)
-            muted -> adjustAlpha(settings.tickColor, 0.25f)
+            muted -> adjustAlpha(settings.tickColor, 0.28f)
             else -> darken(settings.wheelColor, 0.35f)
         }
         canvas.drawCircle(centerX, centerY, r, buttonBgPaint)
@@ -192,7 +243,13 @@ class CircularVolumeView(
         }
         canvas.drawCircle(centerX, centerY, r, border)
 
-        drawSpeakerIcon(canvas, centerX, centerY, r * 1.35f, muted, settings.tickColor)
+        // Иконка спикера: яркая когда muted, полупрозрачная когда звук включён
+        val iconColor = if (muted) {
+            settings.tickColor
+        } else {
+            adjustAlpha(settings.tickColor, SPEAKER_IDLE_ALPHA)
+        }
+        drawSpeakerIcon(canvas, centerX, centerY, r * 1.35f, muted, iconColor)
     }
 
     private fun drawSpeakerIcon(
@@ -254,6 +311,7 @@ class CircularVolumeView(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                wakeUp()
                 downX = event.rawX
                 downY = event.rawY
                 isDragging = false
@@ -290,13 +348,15 @@ class CircularVolumeView(
                 handler.removeCallbacks(longPressRunnable)
                 when {
                     isDragging -> onDragEnd?.invoke()
-                    isCenterPress && event.action == MotionEvent.ACTION_UP -> muteToZero()
+                    isCenterPress && event.action == MotionEvent.ACTION_UP -> toggleMute()
                     !isAdjusting && event.action == MotionEvent.ACTION_UP -> updateVolumeFromTouch(event)
                 }
                 isDragging = false
                 isAdjusting = false
                 isCenterPress = false
                 invalidate()
+                // Отпустили — снова запускаем таймер бездействия
+                scheduleHide()
                 return true
             }
         }
@@ -308,21 +368,36 @@ class CircularVolumeView(
         return dist < muteButtonRadius
     }
 
-    private fun muteToZero() {
+    /**
+     * Mute / Unmute:
+     *  - если звук есть — сохраняем currentVolume и ставим 0;
+     *  - если звук уже 0 — восстанавливаем сохранённый уровень.
+     */
+    private fun toggleMute() {
         try {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, AudioManager.FLAG_SHOW_UI)
-            currentVolume = 0
+            if (currentVolume > 0) {
+                lastNonZeroVolume = currentVolume
+                OverlaySettings.saveLastNonZeroVolume(context, lastNonZeroVolume)
+                audioManager.setStreamVolume(
+                    AudioManager.STREAM_MUSIC, 0, AudioManager.FLAG_SHOW_UI
+                )
+                currentVolume = 0
+            } else {
+                val restore = if (lastNonZeroVolume > 0) lastNonZeroVolume
+                              else DISPLAY_MAX / 2
+                audioManager.setStreamVolume(
+                    AudioManager.STREAM_MUSIC, restore, AudioManager.FLAG_SHOW_UI
+                )
+                currentVolume = restore
+            }
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            Log.d(TAG, "toggleMute -> $currentVolume (last=$lastNonZeroVolume)")
         } catch (e: Exception) {
-            Log.e(TAG, "mute failed", e)
+            Log.e(TAG, "toggleMute failed", e)
         }
         invalidate()
     }
 
-    /**
-     * Угол пальца → деление колеса (0..63) → setStreamVolume(0..63).
-     * Без оглядки на getStreamMaxVolume.
-     */
     private fun updateVolumeFromTouch(event: MotionEvent) {
         val dx = event.x - centerX
         val dy = event.y - centerY
@@ -333,7 +408,6 @@ class CircularVolumeView(
         while (arcCenter - angle > 180f) angle += 360f
 
         val clampedAngle = angle.coerceIn(startAngle, startAngle + sweepAngle)
-
         val virtualVolume = ((clampedAngle - startAngle) / sweepAngle * DISPLAY_MAX)
             .roundToInt()
             .coerceIn(0, DISPLAY_MAX)
@@ -341,8 +415,10 @@ class CircularVolumeView(
         if (virtualVolume == currentVolume) return
 
         currentVolume = virtualVolume
+        if (virtualVolume > 0) {
+            lastNonZeroVolume = virtualVolume
+        }
 
-        // При повышении громкости снимаем mute, если поток был замьючен
         if (virtualVolume > 0) {
             try {
                 if (audioManager.isStreamMute(AudioManager.STREAM_MUSIC)) {
@@ -355,27 +431,20 @@ class CircularVolumeView(
 
         try {
             audioManager.setStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                virtualVolume,           // шлём 0..63 напрямую
-                AudioManager.FLAG_SHOW_UI
+                AudioManager.STREAM_MUSIC, virtualVolume, AudioManager.FLAG_SHOW_UI
             )
-            val readback = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            Log.d(TAG, "set=$virtualVolume, readback=$readback, DISPLAY_MAX=$DISPLAY_MAX")
         } catch (e: IllegalArgumentException) {
-            // Система не принимает такие значения — пробуем пропорционально
-            Log.e(TAG, "setStreamVolume($virtualVolume) rejected, fallback", e)
             val sysMax = try {
                 audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
             } catch (_: Exception) { 15 }
             val fallback = (virtualVolume.toFloat() / DISPLAY_MAX * sysMax)
-                .roundToInt()
-                .coerceIn(0, sysMax)
+                .roundToInt().coerceIn(0, sysMax)
             try {
                 audioManager.setStreamVolume(
                     AudioManager.STREAM_MUSIC, fallback, AudioManager.FLAG_SHOW_UI
                 )
-                Log.d(TAG, "fallback set=$fallback / $sysMax")
             } catch (_: Exception) { }
+            Log.e(TAG, "setStreamVolume($virtualVolume) rejected, fallback=$fallback", e)
         } catch (e: Exception) {
             Log.e(TAG, "setStreamVolume failed", e)
         }
