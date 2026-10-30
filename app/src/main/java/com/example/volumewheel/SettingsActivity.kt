@@ -20,6 +20,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var wheelPreview: View
     private lateinit var tickPreview: View
     private lateinit var sizeLabel: TextView
+    private lateinit var alphaLabel: TextView
+    private lateinit var timeoutLabel: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,18 +31,35 @@ class SettingsActivity : AppCompatActivity() {
 
         val switchEnabled = findViewById<SwitchCompat>(R.id.switch_enabled)
         val seekSize = findViewById<SeekBar>(R.id.seek_size)
+        val seekAlpha = findViewById<SeekBar>(R.id.seek_inactive_alpha)
+        val seekTimeout = findViewById<SeekBar>(R.id.seek_inactive_timeout)
         val btnWheelColor = findViewById<Button>(R.id.btn_wheel_color)
         val btnTickColor = findViewById<Button>(R.id.btn_tick_color)
+
         wheelPreview = findViewById(R.id.wheel_color_preview)
         tickPreview = findViewById(R.id.tick_color_preview)
         sizeLabel = findViewById(R.id.size_label)
+        alphaLabel = findViewById(R.id.alpha_label)
+        timeoutLabel = findViewById(R.id.timeout_label)
 
         switchEnabled.isChecked = settings.enabled
+
         seekSize.max = OverlaySettings.SIZE_MAX - OverlaySettings.SIZE_MIN
         seekSize.progress = (settings.size - OverlaySettings.SIZE_MIN)
             .coerceIn(0, seekSize.max)
+
+        seekAlpha.max = OverlaySettings.ALPHA_MAX_PCT - OverlaySettings.ALPHA_MIN_PCT
+        seekAlpha.progress = ((settings.inactiveAlpha * 100f).toInt() - OverlaySettings.ALPHA_MIN_PCT)
+            .coerceIn(0, seekAlpha.max)
+
+        seekTimeout.max = OverlaySettings.TIMEOUT_MAX - OverlaySettings.TIMEOUT_MIN
+        seekTimeout.progress = (settings.inactiveTimeoutSec - OverlaySettings.TIMEOUT_MIN)
+            .coerceIn(0, seekTimeout.max)
+
         updatePreviews()
         updateSizeLabel()
+        updateAlphaLabel()
+        updateTimeoutLabel()
 
         switchEnabled.setOnCheckedChangeListener { _, checked ->
             settings = settings.copy(enabled = checked)
@@ -51,21 +70,39 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
-        seekSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) {
-                    settings = settings.copy(size = progress + OverlaySettings.SIZE_MIN)
-                    updateSizeLabel()
-                    saveAndNotify()
-                }
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        seekSize.setOnSeekBarChangeListener(simpleListener { progress ->
+            settings = settings.copy(size = progress + OverlaySettings.SIZE_MIN)
+            updateSizeLabel()
+            saveAndNotify()
+        })
+
+        seekAlpha.setOnSeekBarChangeListener(simpleListener { progress ->
+            val pct = progress + OverlaySettings.ALPHA_MIN_PCT
+            settings = settings.copy(inactiveAlpha = pct / 100f)
+            updateAlphaLabel()
+            saveAndNotify()
+        })
+
+        seekTimeout.setOnSeekBarChangeListener(simpleListener { progress ->
+            settings = settings.copy(
+                inactiveTimeoutSec = progress + OverlaySettings.TIMEOUT_MIN
+            )
+            updateTimeoutLabel()
+            saveAndNotify()
         })
 
         btnWheelColor.setOnClickListener { showWheelColorPicker() }
         btnTickColor.setOnClickListener { showTickColorPicker() }
     }
+
+    private fun simpleListener(onChange: (Int) -> Unit) =
+        object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) onChange(progress)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        }
 
     private fun updatePreviews() {
         wheelPreview.background = GradientDrawable().apply {
@@ -80,8 +117,13 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateSizeLabel() {
-        sizeLabel.text = "Размер: ${settings.size} px"
+    private fun updateSizeLabel() { sizeLabel.text = "Размер: ${settings.size} px" }
+    private fun updateAlphaLabel() {
+        val pct = (settings.inactiveAlpha * 100).toInt()
+        alphaLabel.text = "Прозрачность в покое: $pct%"
+    }
+    private fun updateTimeoutLabel() {
+        timeoutLabel.text = "Таймаут неактивности: ${settings.inactiveTimeoutSec} с"
     }
 
     private fun saveAndNotify() {
