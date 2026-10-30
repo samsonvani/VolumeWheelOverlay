@@ -30,7 +30,6 @@ class CircularVolumeView(
     companion object {
         const val DISPLAY_MAX = 63
         private const val TAG = "VolumeWheel"
-        /** Прозрачность иконки спикера, когда звук включён (кнопка «неактивна»). */
         private const val SPEAKER_IDLE_ALPHA = 0.55f
     }
 
@@ -39,7 +38,6 @@ class CircularVolumeView(
     private var currentVolume: Int = 0
     private var lastNonZeroVolume: Int = settings.lastNonZeroVolume
 
-    // --- Кисти ---
     private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -57,7 +55,6 @@ class CircularVolumeView(
         strokeCap = Paint.Cap.ROUND
     }
 
-    // --- Геометрия ---
     private var radius = settings.size.toFloat()
     private val startAngle = -210f
     private val sweepAngle = 240f
@@ -65,7 +62,6 @@ class CircularVolumeView(
     private val centerX get() = width / 2f
     private val centerY get() = height / 2f
 
-    /** Кнопка mute стала заметно крупнее. */
     private val muteButtonRadius get() = radius * 0.28f
     private val innerKnobCenterR get() = radius * 0.52f
     private val innerKnobHalfWidth get() = radius * 0.065f
@@ -89,7 +85,6 @@ class CircularVolumeView(
         onDragStart?.invoke()
     }
 
-    /** Плавно прячет виджет при бездействии. */
     private val hideRunnable = Runnable {
         if (!isDragging && !isAdjusting && !isCenterPress) {
             animate()
@@ -106,14 +101,14 @@ class CircularVolumeView(
             audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, DISPLAY_MAX)
         } catch (_: Exception) { 0 }
 
-        // Если система при старте вернула 0 (mute) — попробуем прошлый уровень из настроек
         if (currentVolume > 0) {
             lastNonZeroVolume = currentVolume
         } else if (lastNonZeroVolume <= 0) {
             lastNonZeroVolume = DISPLAY_MAX / 2
         }
 
-        Log.d(TAG, "init: current=$currentVolume, lastNonZero=$lastNonZeroVolume")
+        Log.d(TAG, "init: current=$currentVolume, lastNonZero=$lastNonZeroVolume, " +
+                "fadeEnabled=${settings.inactiveFadeEnabled}")
         applySettings()
         isClickable = true
         isFocusable = false
@@ -121,13 +116,18 @@ class CircularVolumeView(
 
     fun applySettings() {
         radius = settings.size.toFloat()
+        // Если режим прозрачности выключен — всегда полная видимость
+        if (!settings.inactiveFadeEnabled) {
+            handler.removeCallbacks(hideRunnable)
+            animate().cancel()
+            alpha = 1f
+        }
         requestLayout()
         invalidate()
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        // Стартуем активными и запускаем таймер ухода в прозрачность
         alpha = 1f
         scheduleHide()
     }
@@ -139,7 +139,6 @@ class CircularVolumeView(
         super.onDetachedFromWindow()
     }
 
-    /** Делаем виджет полностью видимым и перезапускаем таймер. */
     private fun wakeUp() {
         handler.removeCallbacks(hideRunnable)
         animate().cancel()
@@ -149,8 +148,19 @@ class CircularVolumeView(
         scheduleHide()
     }
 
+    /**
+     * Планирует уход в прозрачность. Если режим отключён в настройках —
+     * ничего не делает и гарантирует непрозрачность.
+     */
     private fun scheduleHide() {
         handler.removeCallbacks(hideRunnable)
+
+        if (!settings.inactiveFadeEnabled) {
+            animate().cancel()
+            if (alpha != 1f) alpha = 1f
+            return
+        }
+
         val delay = settings.inactiveTimeoutSec.coerceIn(
             OverlaySettings.TIMEOUT_MIN, OverlaySettings.TIMEOUT_MAX
         ) * 1000L
@@ -165,7 +175,6 @@ class CircularVolumeView(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        // 1. Основной диск
         val shader = RadialGradient(
             centerX, centerY, radius,
             intArrayOf(lighten(settings.wheelColor, 0.15f), darken(settings.wheelColor, 0.4f)),
@@ -176,7 +185,6 @@ class CircularVolumeView(
         canvas.drawCircle(centerX, centerY, radius, circlePaint)
         circlePaint.shader = null
 
-        // 2. Внешние метки — 63 штуки
         tickPaint.color = settings.tickColor
         for (i in 0..DISPLAY_MAX) {
             val angle = startAngle + sweepAngle * i / DISPLAY_MAX
@@ -190,10 +198,7 @@ class CircularVolumeView(
             canvas.drawLine(x1, y1, x2, y2, tickPaint)
         }
 
-        // 3. Внутреннее кольцо с риской
         drawInnerKnob(canvas)
-
-        // 4. Кнопка mute в центре
         drawMuteButton(canvas)
     }
 
@@ -243,12 +248,8 @@ class CircularVolumeView(
         }
         canvas.drawCircle(centerX, centerY, r, border)
 
-        // Иконка спикера: яркая когда muted, полупрозрачная когда звук включён
-        val iconColor = if (muted) {
-            settings.tickColor
-        } else {
-            adjustAlpha(settings.tickColor, SPEAKER_IDLE_ALPHA)
-        }
+        val iconColor = if (muted) settings.tickColor
+                        else adjustAlpha(settings.tickColor, SPEAKER_IDLE_ALPHA)
         drawSpeakerIcon(canvas, centerX, centerY, r * 1.35f, muted, iconColor)
     }
 
@@ -355,7 +356,6 @@ class CircularVolumeView(
                 isAdjusting = false
                 isCenterPress = false
                 invalidate()
-                // Отпустили — снова запускаем таймер бездействия
                 scheduleHide()
                 return true
             }
@@ -368,11 +368,6 @@ class CircularVolumeView(
         return dist < muteButtonRadius
     }
 
-    /**
-     * Mute / Unmute:
-     *  - если звук есть — сохраняем currentVolume и ставим 0;
-     *  - если звук уже 0 — восстанавливаем сохранённый уровень.
-     */
     private fun toggleMute() {
         try {
             if (currentVolume > 0) {
@@ -415,9 +410,7 @@ class CircularVolumeView(
         if (virtualVolume == currentVolume) return
 
         currentVolume = virtualVolume
-        if (virtualVolume > 0) {
-            lastNonZeroVolume = virtualVolume
-        }
+        if (virtualVolume > 0) lastNonZeroVolume = virtualVolume
 
         if (virtualVolume > 0) {
             try {
