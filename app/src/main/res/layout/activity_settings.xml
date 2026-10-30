@@ -84,6 +84,34 @@
         <SeekBar
             android:id="@+id/seek_size"
             android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp" />
+
+        <TextView
+            android:id="@+id/alpha_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Прозрачность в покое: 40%"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <SeekBar
+            android:id="@+id/seek_inactive_alpha"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp" />
+
+        <TextView
+            android:id="@+id/timeout_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Таймаут неактивности: 5 с"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <SeekBar
+            android:id="@+id/seek_inactive_timeout"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content" />
 
     </LinearLayout>
