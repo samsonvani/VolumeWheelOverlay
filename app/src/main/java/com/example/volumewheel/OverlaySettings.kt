@@ -9,9 +9,10 @@ data class OverlaySettings(
     val size: Int = 120,
     val posX: Int = -1,
     val posY: Int = -1,
-    val inactiveAlpha: Float = 0.4f,      // 0.1..1.0
-    val inactiveTimeoutSec: Int = 5,      // 1..60
-    val lastNonZeroVolume: Int = 30       // для восстановления после mute
+    val inactiveAlpha: Float = 0.4f,
+    val inactiveTimeoutSec: Int = 5,
+    val inactiveFadeEnabled: Boolean = true,   // NEW
+    val lastNonZeroVolume: Int = 30
 ) {
     companion object {
         private const val PREFS = "overlay_prefs"
@@ -23,6 +24,7 @@ data class OverlaySettings(
         private const val KEY_POS_Y = "pos_y"
         private const val KEY_INACTIVE_ALPHA = "inactive_alpha"
         private const val KEY_INACTIVE_TIMEOUT = "inactive_timeout"
+        private const val KEY_INACTIVE_FADE_ENABLED = "inactive_fade_enabled"
         private const val KEY_LAST_NONZERO = "last_nonzero"
 
         const val SIZE_MIN = 60
@@ -46,6 +48,7 @@ data class OverlaySettings(
                     .coerceIn(ALPHA_MIN_PCT / 100f, 1f),
                 inactiveTimeoutSec = p.getInt(KEY_INACTIVE_TIMEOUT, 5)
                     .coerceIn(TIMEOUT_MIN, TIMEOUT_MAX),
+                inactiveFadeEnabled = p.getBoolean(KEY_INACTIVE_FADE_ENABLED, true),
                 lastNonZeroVolume = p.getInt(KEY_LAST_NONZERO, 30)
             )
         }
@@ -60,6 +63,7 @@ data class OverlaySettings(
                 putInt(KEY_POS_Y, settings.posY)
                 putFloat(KEY_INACTIVE_ALPHA, settings.inactiveAlpha)
                 putInt(KEY_INACTIVE_TIMEOUT, settings.inactiveTimeoutSec)
+                putBoolean(KEY_INACTIVE_FADE_ENABLED, settings.inactiveFadeEnabled)
                 putInt(KEY_LAST_NONZERO, settings.lastNonZeroVolume)
                 apply()
             }
