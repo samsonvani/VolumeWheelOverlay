@@ -22,6 +22,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var sizeLabel: TextView
     private lateinit var alphaLabel: TextView
     private lateinit var timeoutLabel: TextView
+    private lateinit var seekAlpha: SeekBar
+    private lateinit var seekTimeout: SeekBar
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,9 +32,10 @@ class SettingsActivity : AppCompatActivity() {
         settings = OverlaySettings.load(this)
 
         val switchEnabled = findViewById<SwitchCompat>(R.id.switch_enabled)
+        val switchFadeEnabled = findViewById<SwitchCompat>(R.id.switch_fade_enabled)
         val seekSize = findViewById<SeekBar>(R.id.seek_size)
-        val seekAlpha = findViewById<SeekBar>(R.id.seek_inactive_alpha)
-        val seekTimeout = findViewById<SeekBar>(R.id.seek_inactive_timeout)
+        seekAlpha = findViewById(R.id.seek_inactive_alpha)
+        seekTimeout = findViewById(R.id.seek_inactive_timeout)
         val btnWheelColor = findViewById<Button>(R.id.btn_wheel_color)
         val btnTickColor = findViewById<Button>(R.id.btn_tick_color)
 
@@ -43,6 +46,7 @@ class SettingsActivity : AppCompatActivity() {
         timeoutLabel = findViewById(R.id.timeout_label)
 
         switchEnabled.isChecked = settings.enabled
+        switchFadeEnabled.isChecked = settings.inactiveFadeEnabled
 
         seekSize.max = OverlaySettings.SIZE_MAX - OverlaySettings.SIZE_MIN
         seekSize.progress = (settings.size - OverlaySettings.SIZE_MIN)
@@ -60,6 +64,7 @@ class SettingsActivity : AppCompatActivity() {
         updateSizeLabel()
         updateAlphaLabel()
         updateTimeoutLabel()
+        updateFadeControlsEnabled()
 
         switchEnabled.setOnCheckedChangeListener { _, checked ->
             settings = settings.copy(enabled = checked)
@@ -68,6 +73,12 @@ class SettingsActivity : AppCompatActivity() {
                 val intent = Intent(this, VolumeOverlayService::class.java)
                 ContextCompat.startForegroundService(this, intent)
             }
+        }
+
+        switchFadeEnabled.setOnCheckedChangeListener { _, checked ->
+            settings = settings.copy(inactiveFadeEnabled = checked)
+            updateFadeControlsEnabled()
+            saveAndNotify()
         }
 
         seekSize.setOnSeekBarChangeListener(simpleListener { progress ->
@@ -93,6 +104,15 @@ class SettingsActivity : AppCompatActivity() {
 
         btnWheelColor.setOnClickListener { showWheelColorPicker() }
         btnTickColor.setOnClickListener { showTickColorPicker() }
+    }
+
+    /** Ползунки прозрачности/таймаута активны только при включённом режиме. */
+    private fun updateFadeControlsEnabled() {
+        val enabled = settings.inactiveFadeEnabled
+        seekAlpha.isEnabled = enabled
+        seekTimeout.isEnabled = enabled
+        alphaLabel.alpha = if (enabled) 1f else 0.4f
+        timeoutLabel.alpha = if (enabled) 1f else 0.4f
     }
 
     private fun simpleListener(onChange: (Int) -> Unit) =
