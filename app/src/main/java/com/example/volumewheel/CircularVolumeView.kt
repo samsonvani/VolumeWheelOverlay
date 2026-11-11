@@ -1,6 +1,7 @@
 package com.example.volumewheel
 
 import android.content.Context
+import android.database.ContentObserver
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -9,8 +10,10 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -38,6 +41,7 @@ class CircularVolumeView(
     private var currentVolume: Int = 0
     private var lastNonZeroVolume: Int = settings.lastNonZeroVolume
 
+    // --- Кисти ---
     private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -55,6 +59,7 @@ class CircularVolumeView(
         strokeCap = Paint.Cap.ROUND
     }
 
+    // --- Геометрия ---
     private var radius = settings.size.toFloat()
     private val startAngle = -210f
     private val sweepAngle = 240f
@@ -94,13 +99,21 @@ class CircularVolumeView(
         }
     }
 
+    /**
+     * Слушаем изменения системных настроек громкости.
+     * Срабатывает и на кнопки громкости, и на штатный ползунок, и на mute.
+     */
+    private val volumeObserver = object : ContentObserver(handler) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            super.onChange(selfChange, uri)
+            syncFromSystem()
+        }
+    }
+
     private val isMutedNow: Boolean get() = currentVolume == 0
 
     init {
-        currentVolume = try {
-            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, DISPLAY_MAX)
-        } catch (_: Exception) { 0 }
-
+        currentVolume = readSystemVolume()
         if (currentVolume > 0) {
             lastNonZeroVolume = currentVolume
         } else if (lastNonZeroVolume <= 0) {
@@ -114,9 +127,63 @@ class CircularVolumeView(
         isFocusable = false
     }
 
+    /**
+     * Читает громкость из системы в нашей шкале 0..63.
+     * - если isStreamMute — 0;
+     * - если getStreamVolume вернул 0..63 — используем как есть;
+     * - если больше 63 (устройство с >63 шагами) — пропорционально масштабируем.
+     */
+    private fun readSystemVolume(): Int {
+        return try {
+            val muted = try {
+                audioManager.isStreamMute(AudioManager.STREAM_MUSIC)
+            } catch (_: Exception) { false }
+            if (muted) return 0
+
+            val sysVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            when {
+                sysVol <= DISPLAY_MAX -> sysVol.coerceAtLeast(0)
+                else -> {
+                    val sysMax = try {
+                        audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    } catch (_: Exception) { DISPLAY_MAX }
+                    if (sysMax <= 0) DISPLAY_MAX
+                    else (sysVol.toFloat() / sysMax * DISPLAY_MAX)
+                        .roundToInt().coerceIn(0, DISPLAY_MAX)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "readSystemVolume failed", e)
+            currentVolume
+        }
+    }
+
+    /**
+     * Синхронизация с системой. Не вмешивается, если пользователь сейчас
+     * крутит или таскает колесо (эти изменения мы и так знаем сами).
+     */
+    private fun syncFromSystem() {
+        if (isAdjusting || isDragging) return
+        val newVol = readSystemVolume()
+        if (newVol == currentVolume) return
+
+        val wasMuted = currentVolume == 0
+        currentVolume = newVol
+
+        if (newVol > 0) {
+            lastNonZeroVolume = newVol
+            OverlaySettings.saveLastNonZeroVolume(context, newVol)
+        }
+
+        Log.d(TAG, "syncFromSystem: $currentVolume (muted=$wasMuted)")
+        invalidate()
+
+        // Показать колесо при изменении извне (нажатие физических кнопок и т.п.)
+        wakeUp()
+    }
+
     fun applySettings() {
         radius = settings.size.toFloat()
-        // Если режим прозрачности выключен — всегда полная видимость
         if (!settings.inactiveFadeEnabled) {
             handler.removeCallbacks(hideRunnable)
             animate().cancel()
@@ -130,12 +197,28 @@ class CircularVolumeView(
         super.onAttachedToWindow()
         alpha = 1f
         scheduleHide()
+        // Подписка на изменения громкости в системе
+        try {
+            context.contentResolver.registerContentObserver(
+                Settings.System.CONTENT_URI,
+                true,
+                volumeObserver
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "registerContentObserver failed", e)
+        }
+        // Однократно подтягиваем актуальное значение на случай, если
+        // громкость менялась, пока View не был создан
+        syncFromSystem()
     }
 
     override fun onDetachedFromWindow() {
         handler.removeCallbacks(hideRunnable)
         handler.removeCallbacks(longPressRunnable)
         animate().cancel()
+        try {
+            context.contentResolver.unregisterContentObserver(volumeObserver)
+        } catch (_: Exception) { }
         super.onDetachedFromWindow()
     }
 
@@ -148,10 +231,6 @@ class CircularVolumeView(
         scheduleHide()
     }
 
-    /**
-     * Планирует уход в прозрачность. Если режим отключён в настройках —
-     * ничего не делает и гарантирует непрозрачность.
-     */
     private fun scheduleHide() {
         handler.removeCallbacks(hideRunnable)
 
